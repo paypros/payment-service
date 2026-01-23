@@ -1,0 +1,20 @@
+🔹 Roadmap de aprendizaje en AWS
+1. ECR (Elastic Container Registry)
+- Crear repositorio.
+- Subir imágenes desde GitHub Actions.
+- Confirmar que tu imagen está disponible.
+2. ECS (Elastic Container Service) con Fargate
+- Crear un cluster ECS.
+- Definir un Task Definition que use tu imagen de ECR.
+- Crear un Service que corra esa tarea.
+- Configurar networking (VPC, subnets, security groups).
+3. RDS (Relational Database Service)
+- Crear una instancia PostgreSQL.
+- Configurar usuario, contraseña y base.
+- Conectar tu app usando variables de entorno (SPRING_DATASOURCE_URL, etc.).
+4. Secrets Manager / Parameter Store
+- Guardar credenciales de DB y API keys.
+- Referenciarlas en ECS para que tu app las lea sin hardcode.
+5. CloudWatch
+- Revisar logs de tu contenedor.
+- Configurar alarmas básicas (CPU, memoria, errores)

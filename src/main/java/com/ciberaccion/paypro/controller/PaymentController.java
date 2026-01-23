@@ -14,8 +14,10 @@ import com.ciberaccion.paypro.model.Payment;
 import com.ciberaccion.paypro.service.PaymentService;
 
 import jakarta.validation.Valid;
+import lombok.extern.slf4j.Slf4j;
 
 @RestController
+@Slf4j
 public class PaymentController {
 
     private final PaymentService paymentService;
