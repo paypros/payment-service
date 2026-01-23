@@ -1,0 +1,59 @@
+{
+  "info": {
+    "name": "PayPro API",
+    "_postman_id": "12345678-abcd-efgh-ijkl-987654321000",
+    "description": "Colección para probar la API de pagos de PayPro",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Create Payment",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"merchant\": \"Store123\",\n  \"amount\": 100.50,\n  \"currency\": \"USD\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/payments",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["payments"]
+        }
+      }
+    },
+    {
+      "name": "Get Payment by ID",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:8080/payments/1",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["payments", "1"]
+        }
+      }
+    },
+    {
+      "name": "Get All Payments",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:8080/payments",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["payments"]
+        }
+      }
+    }
+  ]
+}
