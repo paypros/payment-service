@@ -44,5 +44,5 @@ jobs:
         run: |
           aws ecs update-service \
             --cluster paypro-cluster \
-            --service paypro-task2301-service-dy51lg1k \
+            --service paypro-task2301-service-dy55lg1k \
             --force-new-deployment
