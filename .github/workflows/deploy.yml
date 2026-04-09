@@ -40,9 +40,18 @@ jobs:
           docker tag paypro:latest $IMAGE_URI
           docker push $IMAGE_URI
 
+      - name: Start ECS service
+        run: |
+          aws ecs update-service \
+            --cluster paypro-cluster \
+            --service paypro-service \
+            --desired-count 1 \
+            --region ${{ secrets.AWS_REGION }}
+          
       - name: Force ECS redeploy
         run: |
           aws ecs update-service \
             --cluster paypro-cluster \
             --service paypro-service \
             --force-new-deployment
+            --region ${{ secrets.AWS_REGION }}

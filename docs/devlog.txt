@@ -1,3 +1,226 @@
+23-enero 
+docker-compose build paypro-app
+docker-compose up -d paypro-app
+
+ver los logs del docker
+docker logs -f paypro-app
+
+Error al actualizar task en ECS, las task anteriores seguian corriendo y se mesclaban los 
+log viejos con nuevos y eso creaba confusion de que el error aun no se solucionaba
+
+Error al conectarse a DB Postgress de AWS con pgAdmin, daba error de que no se podia conectar, el problema era que la configuracion de la DB no estaba como publica.
+
+Error de dialecto JDBC o algo asi que no se conectaba la DB Postgress con la app paypro
+por los security groups no estaban bien configurados, se tiene que poner
+que ambos le den acceso uno al otro
+
+24 Ene
+Exit code: 143 , la tarea nueva se traslapa con la vieja en el log, dice start y luegoo la termina
+pero son tareas diferentes
+
+Ya corre bien en AWS, probado con Postman PayPro (WithAPI Key), digamos que estas el verion inicial
+punto a mejorar , seprar los logs por tarea usando awslogs-stream-prefix en la task definition
+para que cada task tenga su propio stream
+punto a mejorar, los secrets handling
+
+🔹 Paso 1: Escalar el servicio en ECS
+- Ve a tu ECS → Cluster → Service (paypro-task2301-service-dy51lg1k).
+- Cambia el Desired tasks de 1 a 2.
+
+curl http://18.206.137.50:8080/actuator/health          930a
+curl http://54.91.246.97:8080/actuator/health          bb7a
+curl http://alb-paypro-87731947.us-east-1.elb.amazonaws.com/actuator/health
+curl http://alb-paypro-87731947.us-east-1.elb.amazonaws.com/actuator/health
+            alb-paypro-87731947.us-east-1.elb.amazonaws.com
+- crear App Load Balancer 
+- Conectar ECS Service al ALB
+
+- Task desired 2
+en service Editar vpc - seleccionar solo la subnet a,b,c por que se estaban creando
+tasks en otras subnets y en el load balancer solo puse la us-east-1a y us-east-1b
+-  ECS → Cluster → Service → Edit → Networking.
+-  EC2 → Target Groups → Targets.
+
+alb-paypro-87731947.us-east-1.elb.amazonaws.com
+
+nslookup alb-paypro-87731947.us-east-1.elb.amazonaws.com
+ping alb-paypro-87731947.us-east-1.elb.amazonaws.com
+
+Error: sigue dando timeout el health check del url del ALB
+La solucion fue agregar inbound rule al sg paypro-sg, puerto 80 0.0.0.0 para tener 
+salida a internet
+
+80   publico    ALB listener            Entrada HTTP desde internet
+8080 interno    Contenedor Spring Boot  Puerto donde corre tu app
+
+✅ En resumen
+- Tú sigues usando 8080 en el contenedor, como siempre.
+- El ALB escucha en 80, enruta al 8080.
+- El Target Group es el puente que conecta ambos mundos.
+
+for i in {1..10}; do curl http://alb-paypro-87731947.us-east-1.elb.amazonaws.com/actuator/health; done
+
+- Improve Observability, 
+Add metrics, Instrument API endpoints with tracing and store tracing,
+Monitor: latency, QPS, error rate
+
+1. Métricas básicas (latency, QPS, error rate)
+- Spring Boot Actuator + Micrometer
+- Actuator ya expone métricas internas.
+- Con Micrometer puedes enviarlas a CloudWatch, Prometheus, o Grafana.
+- Métricas clave:
+- http.server.requests → latencia, QPS, error rate.
+- jvm.memory.used, system.cpu.usage → salud del sistema.
+👉 Minimalista: basta con añadir la dependencia de Micrometer CloudWatch y configurar el namespace
+Pendiente:
+¿Quieres que te arme un ejemplo de dashboard en CloudWatch para visualizar latencia, QPS y error rate de tu API PayPro una vez que tengas las métricas exportadas?
+
+http://localhost:8080/actuator/metrics
+curl http://localhost:8080/actuator/metrics/http.server.requests
+
+🔹 2. Tracing de endpoints
+- OpenTelemetry (OTel) es el estándar actual.
+- Instrumenta tus endpoints con trazas automáticas: cada request genera un trace con spans.
+- Puedes enviarlos a AWS X-Ray, Jaeger, o Tempo.
+- Esto te permite ver:
+- Qué endpoints tardan más.
+- Dónde ocurren errores.
+- Cómo fluye una petición entre microservicios (cuando tengas más).
+👉 Minimalista: usa el starter de OpenTelemetry para Spring Boot, que ya intercepta requests automáticamente.
+
+1. Levantar Jaeger con Docker
+Ejecuta este comando en tu máquina:
+docker run -d --name jaeger \
+  -e COLLECTOR_ZIPKIN_HTTP_PORT=9411 \
+  -p 5775:5775/udp \
+  -p 6831:6831/udp \
+  -p 6832:6832/udp \
+  -p 5778:5778 \
+  -p 16686:16686 \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  -p 14250:14250 \
+  -p 14268:14268 \
+  -p 14269:14269 \
+  -p 9411:9411 \
+  jaegertracing/all-in-one:latest
+
+
+Esto levanta Jaeger con soporte para OTLP (puerto 4317), que es el que usa OpenTelemetry.
+
+🔹 2. Configurar tu aplicación Spring Boot
+En tu application.properties agrega:
+otel.traces.exporter=otlp
+otel.exporter.otlp.endpoint=http://localhost:4317
+otel.resource.attributes=service.name=paypro
+
+
+Con esto, cada request a tu API genera un trace y lo envía al collector local.
+
+🔹 3. Probar trazas
+- Levanta tu aplicación (mvn spring-boot:run o ./gradlew bootRun).
+- Haz algunas peticiones:
+curl http://localhost:8080/api/usuarios
+curl http://localhost:8080/api/pagos
+- Abre Jaeger en el navegador:
+http://localhost:16686
+- Selecciona el servicio paypro y verás los traces con latencia, spans y errores.
+
+🔹 4. Migrar a AWS después
+Cuando lo tengas probado en local:
+- En ECS/Fargate, en lugar de localhost:4317, apuntas al AWS Distro for OpenTelemetry (ADOT) Collector o a X-Ray.
+- El flujo es el mismo, solo cambia el destino de las trazas.
+
+✅ Con esto ya puedes validar en tu máquina que los traces se generan y se visualizan, antes de subir nada al repo o a AWS.
+👉 ¿Quieres que te arme un ejemplo de cómo se vería un trace típico en Jaeger para un endpoint /pagos con spans de controller → service → repository?
+
+Levantar Jaeger con Docker
+docker run -d --name jaeger \
+  -e COLLECTOR_ZIPKIN_HTTP_PORT=9411 \
+  -p 5775:5775/udp \
+  -p 6831:6831/udp \
+  -p 6832:6832/udp \
+  -p 5778:5778 \
+  -p 16686:16686 \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  -p 14250:14250 \
+  -p 14268:14268 \
+  -p 14269:14269 \
+  -p 9411:9411 \
+  jaegertracing/all-in-one:latest
+
+- Abre Jaeger en el navegador:
+http://localhost:16686
+- Selecciona el servicio paypro y verás los traces con latencia, spans y errores
+
+Perfecto! El build se completó exitosamente. El problema era el conflicto de versiones entre las dependencias de OpenTelemetry. Ahora solo usas el opentelemetry-spring-boot-starter:2.24.0 que incluye todo lo necesari
+
+No Hay Trazas en el Jeager
+2026-01-25 14:35:08.562  WARN HttpExporter - Failed to export spans. Server responded with HTTP status code 404. Error message: Unable to parse response body, HTTP status message: Not Found 
+application.properties -> otel.exporter.otlp.endpoint=http://localhost:4318/v1/traces
+" Usar HTTP en el puerto 4318 (pero sin /v1/traces)" esto funciono!
+ya se ven las trazas en jeager UI
+
+🔹 4. Dashboards y alertas
+- CloudWatch Dashboards: gráficos de latencia, QPS, error rate.
+- CloudWatch Alarms: alertas si error rate > 5% o latencia > 2s.
+- Grafana (si quieres algo más visual): conecta Prometheus/CloudWatch y arma dashboards.
+
+mantén Jaeger en tu código para desarrollo local.
+- En producción: cambia el endpoint al ADOT Collector → X-Ray.
+- Así no pierdes trazas en local y aprovechas X-Ray en AWS
+
+- ADOT Collector en ECS/Fargate
+- Se despliega como sidecar o daemon.
+- Recibe OTLP gRPC en 4317.
+- Reenvía a AWS X-Ray automáticamente.
+- IAM Role
+- La tarea ECS debe tener permisos xray:PutTraceSegments y xray:PutTelemetryRecords.
+
+👉 ¿Quieres que te arme un ejemplo de task definition de ECS con ADOT Collector sidecar para que veas cómo se conecta tu app paypro a X-Ray?
+ 
+--------------------------------------------------------
+CORRER EN H2 local
+apuntar y descomentar application-dev.properties en application.properties
+--------------------------------------------------------
+CORRER DOCKER local
+comentar application-dev.properties en application.properties
+borrar jar
+ESTO NO -> asegurarse de que el jar en carpeta traget se crea de nuevo <-
+Recordar que la applicacion se compila en Docker file
+NO correr desde VSC, para correr en docker, se crean las imagenes y containers de dockers
+y se levanta el container
+--------------------------------------------------------
+CORRER AWS
+application.properties igual que docker local
+--------------------------------------------------------
+
+error en docker
+Factory method 'autoConfiguredOpenTelemetrySdk' threw exception with message: OTLP endpoint must be a valid URL: adot-collector:4318
+Solucion:
+Usar Variables de entorno, as flexible
+En application.properties:
+otel.exporter.otlp.endpoint=${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}
+- En AWS, defines OTEL_EXPORTER_OTLP_ENDPOINT=adot-collector:4318 en la task definition → usa el collector.
+- En AWS esto está bien, porque ahí sí habrá un ADOT Collector corriendo con ese hostname en el VPC/ECS.
+Desactivar OpenTelemetry en local
+Si no quieres trazas en Docker local, puedes condicionar:
+otel.traces.exporter=none
+Y solo activar OTLP en AWS.
+
+NOTA: Suspendemos lo de telemetry por que dara error en AWS hasta que se haya  creado un ADOT collector
+- En AWS defines OTEL_TRACES_EXPORTER=none → no exporta trazas, no falla.
+- En local defines OTEL_TRACES_EXPORTER=otlp → sí exporta a Jaeger.
+- Así no tienes que quitar dependencias ni perder la capacidad de probar trazas en dev.
+
+opcion1 remover dependencias y comntar en application.properties
+opcion 2 Usa perfiles o variables de entorno para condicionar el exporter
+otel.traces.exporter=${OTEL_TRACES_EXPORTER:none}
+ya probe en dockers y si funciona, subo cambios a git, espero no falle en AWS
+
+Continuamos con databse replication
+
 8-Abril
 Bind for 0.0.0.0:5432 failed: port is already allocated
 Cambiar Puerto a 5430
@@ -30,3 +253,22 @@ Ese error es porque falta el service linked role de ECS en tu cuenta nueva. Es u
 La forma más rápida de crearlo es desde CloudShell (la terminal de AWS, es gratuita):
 Haz clic en el ícono de terminal >_ en la barra superior de la consola AWS
 Ejecuta este comando: bashaws iam create-service-linked-role --aws-service-name ecs.amazonaws.com
+
+9-Abril
+# apagar
+ 
+
+# encender
+aws ecs update-service \
+  --cluster paypro-cluster \
+  --service paypro-service \
+  --desired-count 1 \
+  --region us-east-1
+
+Cluster  (paypro-cluster)
+└── Service  (paypro-service)  ← mantiene N tasks corriendo
+    └── Task  (instancia corriendo)  ← basada en paypro-task:2
+        ├── Container: paypro-db
+        └── Container: paypro  
+
+- Agregrar Start ECS service Automatico al pipeline
