@@ -1,0 +1,26 @@
+8-Abril
+Bind for 0.0.0.0:5432 failed: port is already allocated
+Cambiar Puerto a 5430
+En Docker, el mapeo de puertos se define como HOST:CONTAINER
+
+postgres: "5430:5432"
+pay-pro : "8081:8080"
+
+¿Quién dispara ApiKeyFilter?
+ApiKeyFilter extiende OncePerRequestFilter y tiene @Component — eso hace que Spring lo registre automáticamente en el filtro chain de todos los requests, sin necesidad de configuración adicional.
+
+El flujo para GET /payments:
+
+HTTP Request
+    ↓
+Servlet Filter Chain (Spring)
+    ↓
+ApiKeyFilter.doFilterInternal()   ← aquí se valida el header X-API-KEY
+    ↓ (si es válido)
+DispatcherServlet
+    ↓
+PaymentsController
+Nota sobre SecurityConfig
+El FilterRegistrationBean está comentado — eso hubiera sido una forma manual de registrar el filtro solo en /payments/*. Como está comentado, aplica a todos los endpoints (excepto /actuator que tiene su propia excepción en el filtro).
+
+En resumen: @Component es suficiente para que Spring Boot lo inyecte automáticamente en cada request.
