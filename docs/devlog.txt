@@ -1,3 +1,25 @@
+# paypro
+
+Implementar Authenticacion.
+decision de diseño:
+(Simple) API key or basic token authentication.
+- API Key (X-API-KEY) → más simple, fácil de explicar en entrevistas.
+- Bearer Token → más cercano a prácticas reales (aunque aquí es estático).
+
+Lo que ya lograste
+- ✅ Spring Boot app levantada con Postgres/H2 según perfil.
+- ✅ Endpoints de pagos (POST, GET by id, GET all).
+- ✅ Validación de requests con @Valid.
+- ✅ Autenticación simple con API Key funcionando y probada en Postman.
+
+Próximos pasos sugeridos
+Ya que tienes la base sólida, puedes decidir hacia dónde avanzar en tu preparación de system design:
+- Estados del pago → definir transición (PENDING → SUCCESS/FAILED) y cómo se manejan errores.
+- Idempotencia → evitar duplicados en POST /payments.
+- Escalabilidad → pensar en colas/eventos para procesar pagos asíncronos.
+- Observabilidad → logs, métricas, health checks con Actuator.
+- Separación de entornos → perfilar dev/h2 y prod/postgres con configuración clara
+
 23-enero 
 docker-compose build paypro-app
 docker-compose up -d paypro-app
@@ -276,3 +298,19 @@ Cluster  (paypro-cluster)
         └── Container: paypro  
 
 - Agregrar Start ECS service Automatico al pipeline
+
+Encender account-service
+aws ecs update-service \
+  --cluster paypro-cluster \
+  --service account-service \
+  --desired-count 1 \
+  --region us-east-1
+
+LOGS
+  aws logs tail /ecs/account-service-task \
+  --region us-east-1 \
+  --since 10m
+
+APAGAR
+aws ecs update-service --cluster paypro-cluster --service paypro-service --desired-count 0 --region us-east-1
+aws ecs update-service --cluster paypro-cluster --service account-service --desired-count 0 --region us-east-1

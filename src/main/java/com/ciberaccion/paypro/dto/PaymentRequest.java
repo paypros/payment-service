@@ -26,6 +26,9 @@ public class PaymentRequest {
     @NotBlank(message = "Currency is required")
     private String currency;
 
+    @NotBlank(message = "Card number is required")
+    private String cardNumber;
+
     // getters y setters
 
 }
