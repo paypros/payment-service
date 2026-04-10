@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.ciberaccion.paypro.dto.PaymentRequest;
 import com.ciberaccion.paypro.dto.PaymentResponse;
-import com.ciberaccion.paypro.model.Payment;
 import com.ciberaccion.paypro.service.PaymentService;
 
 import jakarta.validation.Valid;
@@ -28,7 +27,7 @@ public class PaymentController {
     }
 
     @PostMapping("/payments")
-    public ResponseEntity<Payment> createPayment(@Valid @RequestBody PaymentRequest request) {
+    public ResponseEntity<PaymentResponse> createPayment(@Valid @RequestBody PaymentRequest request) {
         return ResponseEntity.ok(paymentService.create(request));
     }
 
