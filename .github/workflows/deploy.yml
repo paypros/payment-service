@@ -1,4 +1,4 @@
-name: Deploy to Amazon ECR
+name: Deploy to Amazon ECR Public
 
 on:
   push:
@@ -22,22 +22,24 @@ jobs:
         run: mvn clean package -DskipTests
 
       - name: Build Docker image
-        run: docker build -t paypro:latest .
+        run: docker build -t payment-service:latest .
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: us-east-1
 
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: Push Docker image to ECR
+      - name: Login to Amazon ECR Public
         run: |
-          IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/ciberaccion/paypro:latest
-          docker tag paypro:latest $IMAGE_URI
+          aws ecr-public get-login-password --region us-east-1 | \
+          docker login --username AWS --password-stdin public.ecr.aws
+
+      - name: Push Docker image to ECR Public
+        run: |
+          IMAGE_URI=public.ecr.aws/q7r9n9o9/ciberaccion/payment-service:latest
+          docker tag payment-service:latest $IMAGE_URI
           docker push $IMAGE_URI
 
       - name: Start ECS service
@@ -46,12 +48,12 @@ jobs:
             --cluster paypro-cluster \
             --service paypro-service \
             --desired-count 1 \
-            --region ${{ secrets.AWS_REGION }}
-          
+            --region us-east-1
+
       - name: Force ECS redeploy
         run: |
           aws ecs update-service \
             --cluster paypro-cluster \
             --service paypro-service \
             --force-new-deployment \
-            --region ${{ secrets.AWS_REGION }}
+            --region us-east-1
