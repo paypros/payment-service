@@ -8,6 +8,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import com.ciberaccion.paypro.dto.CardValidationRequest;
+import com.ciberaccion.paypro.dto.CardValidationResponse;
 import com.ciberaccion.paypro.dto.DebitRequest;
 import com.ciberaccion.paypro.dto.PaymentEvent;
 import com.ciberaccion.paypro.dto.PaymentRequest;
@@ -17,23 +18,123 @@ import com.ciberaccion.paypro.model.Payment;
 import com.ciberaccion.paypro.model.PaymentStatus;
 import com.ciberaccion.paypro.repository.PaymentRepository;
 
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
+import lombok.extern.slf4j.Slf4j;
+
 @Service
+@Slf4j
 public class PaymentService {
 
     private final PaymentRepository paymentRepository;
-    private final WebClient accountWebClient;
-    private final WebClient providerWebClient;
+    private final AccountServiceClient accountServiceClient;
+    private final ProviderServiceClient providerServiceClient;
     private final NotificationPublisher notificationPublisher;
 
     public PaymentService(PaymentRepository paymentRepository,
-            WebClient accountWebClient,
-            WebClient providerWebClient,
+            AccountServiceClient accountServiceClient,
+            ProviderServiceClient providerServiceClient,
             NotificationPublisher notificationPublisher) {
         this.paymentRepository = paymentRepository;
-        this.accountWebClient = accountWebClient;
-        this.providerWebClient = providerWebClient;
+        this.accountServiceClient = accountServiceClient;
+        this.providerServiceClient = providerServiceClient;
         this.notificationPublisher = notificationPublisher;
     }
+
+    /*
+     * public PaymentResponse create(PaymentRequest request) {
+     * Payment payment = new Payment();
+     * payment.setMerchant(request.getMerchant());
+     * payment.setAmount(request.getAmount());
+     * payment.setCurrency(request.getCurrency());
+     * payment.setCreatedAt(LocalDateTime.now());
+     * 
+     * // 1. Validar tarjeta con provider
+     * try {
+     * CardValidationRequest cardRequest = new CardValidationRequest(
+     * request.getCardNumber(),
+     * request.getAmount(),
+     * request.getCurrency());
+     * 
+     * Boolean approved = providerWebClient.post()
+     * .uri("/provider/validate")
+     * .bodyValue(cardRequest)
+     * .retrieve()
+     * .bodyToMono(com.ciberaccion.paypro.dto.CardValidationResponse.class)
+     * .map(com.ciberaccion.paypro.dto.CardValidationResponse::isApproved)
+     * .block();
+     * 
+     * if (approved == null || !approved) {
+     * payment.setStatus(PaymentStatus.REJECTED);
+     * return toResponse(paymentRepository.save(payment));
+     * }
+     * 
+     * } catch (Exception e) {
+     * payment.setStatus(PaymentStatus.REJECTED);
+     * return toResponse(paymentRepository.save(payment));
+     * }
+     * 
+     * // 2. Validar saldo con account-service
+     * try {
+     * accountWebClient.post()
+     * .uri("/accounts/{merchantId}/debit", request.getMerchant())
+     * .bodyValue(new DebitRequest(request.getAmount()))
+     * .retrieve()
+     * .toBodilessEntity()
+     * .block();
+     * 
+     * payment.setStatus(PaymentStatus.APPROVED);
+     * 
+     * } catch (WebClientResponseException e) {
+     * payment.setStatus(PaymentStatus.REJECTED);
+     * }
+     * 
+     * Payment saved = paymentRepository.save(payment);
+     * notificationPublisher.publish(toEvent(saved));
+     * return toResponse(saved);
+     * }
+     */
+
+    /*
+     * public PaymentResponse create(PaymentRequest request) {
+     * Payment payment = new Payment();
+     * payment.setMerchant(request.getMerchant());
+     * payment.setAmount(request.getAmount());
+     * payment.setCurrency(request.getCurrency());
+     * payment.setCreatedAt(LocalDateTime.now());
+     * 
+     * // 1. Validar tarjeta con provider
+     * try {
+     * boolean approved = validateCard(request);
+     * if (!approved) {
+     * payment.setStatus(PaymentStatus.REJECTED);
+     * Payment saved = paymentRepository.save(payment);
+     * notificationPublisher.publish(toEvent(saved));
+     * return toResponse(saved);
+     * }
+     * } catch (Exception e) {
+     * log.warn("Provider service unavailable: {}", e.getMessage());
+     * payment.setStatus(PaymentStatus.REJECTED);
+     * Payment saved = paymentRepository.save(payment);
+     * notificationPublisher.publish(toEvent(saved));
+     * return toResponse(saved);
+     * }
+     * 
+     * // 2. Validar saldo con account-service
+     * try {
+     * debitAccount(request);
+     * payment.setStatus(PaymentStatus.APPROVED);
+     * } catch (Exception e) {
+     * log.warn("Account service unavailable or insufficient funds: {}",
+     * e.getMessage());
+     * payment.setStatus(PaymentStatus.REJECTED);
+     * }
+     * 
+     * Payment saved = paymentRepository.save(payment);
+     * notificationPublisher.publish(toEvent(saved));
+     * return toResponse(saved);
+     * }
+     */
 
     public PaymentResponse create(PaymentRequest request) {
         Payment payment = new Payment();
@@ -42,43 +143,29 @@ public class PaymentService {
         payment.setCurrency(request.getCurrency());
         payment.setCreatedAt(LocalDateTime.now());
 
-        // 1. Validar tarjeta con provider
+        // 1. Validar tarjeta
         try {
-            CardValidationRequest cardRequest = new CardValidationRequest(
-                    request.getCardNumber(),
-                    request.getAmount(),
-                    request.getCurrency());
-
-            Boolean approved = providerWebClient.post()
-                    .uri("/provider/validate")
-                    .bodyValue(cardRequest)
-                    .retrieve()
-                    .bodyToMono(com.ciberaccion.paypro.dto.CardValidationResponse.class)
-                    .map(com.ciberaccion.paypro.dto.CardValidationResponse::isApproved)
-                    .block();
-
-            if (approved == null || !approved) {
+            boolean approved = providerServiceClient.validate(request);
+            if (!approved) {
                 payment.setStatus(PaymentStatus.REJECTED);
-                return toResponse(paymentRepository.save(payment));
+                Payment saved = paymentRepository.save(payment);
+                notificationPublisher.publish(toEvent(saved));
+                return toResponse(saved);
             }
-
         } catch (Exception e) {
+            log.warn("Provider validation failed: {}", e.getMessage());
             payment.setStatus(PaymentStatus.REJECTED);
-            return toResponse(paymentRepository.save(payment));
+            Payment saved = paymentRepository.save(payment);
+            notificationPublisher.publish(toEvent(saved));
+            return toResponse(saved);
         }
 
-        // 2. Validar saldo con account-service
+        // 2. Debitar cuenta
         try {
-            accountWebClient.post()
-                    .uri("/accounts/{merchantId}/debit", request.getMerchant())
-                    .bodyValue(new DebitRequest(request.getAmount()))
-                    .retrieve()
-                    .toBodilessEntity()
-                    .block();
-
+            accountServiceClient.debit(request);
             payment.setStatus(PaymentStatus.APPROVED);
-
-        } catch (WebClientResponseException e) {
+        } catch (Exception e) {
+            log.warn("Account debit failed: {}", e.getMessage());
             payment.setStatus(PaymentStatus.REJECTED);
         }
 
@@ -118,4 +205,41 @@ public class PaymentService {
                 payment.getStatus(),
                 payment.getCreatedAt());
     }
+
+    // @CircuitBreaker(name = "providerService", fallbackMethod = "validateCardFallback")
+    // @Retry(name = "providerService")
+    // public boolean validateCard(PaymentRequest request) {
+    //     CardValidationRequest cardRequest = new CardValidationRequest(
+    //             request.getCardNumber(),
+    //             request.getAmount(),
+    //             request.getCurrency());
+    //     CardValidationResponse response = providerWebClient.post()
+    //             .uri("/provider/validate")
+    //             .bodyValue(cardRequest)
+    //             .retrieve()
+    //             .bodyToMono(CardValidationResponse.class)
+    //             .block();
+    //     return response != null && response.isApproved();
+    // }
+
+    // public boolean validateCardFallback(PaymentRequest request, Exception e) {
+    //     log.warn("Circuit breaker open for providerService: {}", e.getMessage());
+    //     return false;
+    // }
+
+    // @CircuitBreaker(name = "accountService", fallbackMethod = "debitAccountFallback")
+    // @Retry(name = "accountService")
+    // public void debitAccount(PaymentRequest request) {
+    //     accountWebClient.post()
+    //             .uri("/accounts/{merchantId}/debit", request.getMerchant())
+    //             .bodyValue(new DebitRequest(request.getAmount()))
+    //             .retrieve()
+    //             .toBodilessEntity()
+    //             .block();
+    // }
+
+    // public void debitAccountFallback(PaymentRequest request, Exception e) {
+    //     log.warn("Circuit breaker open for accountService: {}", e.getMessage());
+    //     throw new RuntimeException("Account service unavailable");
+    // }
 }
