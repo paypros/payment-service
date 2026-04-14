@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
@@ -14,9 +15,12 @@ import com.ciberaccion.paypro.dto.PaymentEvent;
 import com.ciberaccion.paypro.dto.PaymentRequest;
 import com.ciberaccion.paypro.dto.PaymentResponse;
 import com.ciberaccion.paypro.exception.PaymentNotFoundException;
+import com.ciberaccion.paypro.model.OutboxEvent;
 import com.ciberaccion.paypro.model.Payment;
 import com.ciberaccion.paypro.model.PaymentStatus;
+import com.ciberaccion.paypro.repository.OutboxEventRepository;
 import com.ciberaccion.paypro.repository.PaymentRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
@@ -27,115 +31,24 @@ import lombok.extern.slf4j.Slf4j;
 public class PaymentService {
 
     private final PaymentRepository paymentRepository;
+    private final OutboxEventRepository outboxEventRepository;
     private final AccountServiceClient accountServiceClient;
     private final ProviderServiceClient providerServiceClient;
-    private final NotificationPublisher notificationPublisher;
+    private final ObjectMapper objectMapper;
 
     public PaymentService(PaymentRepository paymentRepository,
-            AccountServiceClient accountServiceClient,
-            ProviderServiceClient providerServiceClient,
-            NotificationPublisher notificationPublisher) {
+                          OutboxEventRepository outboxEventRepository,
+                          AccountServiceClient accountServiceClient,
+                          ProviderServiceClient providerServiceClient,
+                          ObjectMapper objectMapper) {
         this.paymentRepository = paymentRepository;
+        this.outboxEventRepository = outboxEventRepository;
         this.accountServiceClient = accountServiceClient;
         this.providerServiceClient = providerServiceClient;
-        this.notificationPublisher = notificationPublisher;
+        this.objectMapper = objectMapper;
     }
 
-    /*
-     * public PaymentResponse create(PaymentRequest request) {
-     * Payment payment = new Payment();
-     * payment.setMerchant(request.getMerchant());
-     * payment.setAmount(request.getAmount());
-     * payment.setCurrency(request.getCurrency());
-     * payment.setCreatedAt(LocalDateTime.now());
-     * 
-     * // 1. Validar tarjeta con provider
-     * try {
-     * CardValidationRequest cardRequest = new CardValidationRequest(
-     * request.getCardNumber(),
-     * request.getAmount(),
-     * request.getCurrency());
-     * 
-     * Boolean approved = providerWebClient.post()
-     * .uri("/provider/validate")
-     * .bodyValue(cardRequest)
-     * .retrieve()
-     * .bodyToMono(com.ciberaccion.paypro.dto.CardValidationResponse.class)
-     * .map(com.ciberaccion.paypro.dto.CardValidationResponse::isApproved)
-     * .block();
-     * 
-     * if (approved == null || !approved) {
-     * payment.setStatus(PaymentStatus.REJECTED);
-     * return toResponse(paymentRepository.save(payment));
-     * }
-     * 
-     * } catch (Exception e) {
-     * payment.setStatus(PaymentStatus.REJECTED);
-     * return toResponse(paymentRepository.save(payment));
-     * }
-     * 
-     * // 2. Validar saldo con account-service
-     * try {
-     * accountWebClient.post()
-     * .uri("/accounts/{merchantId}/debit", request.getMerchant())
-     * .bodyValue(new DebitRequest(request.getAmount()))
-     * .retrieve()
-     * .toBodilessEntity()
-     * .block();
-     * 
-     * payment.setStatus(PaymentStatus.APPROVED);
-     * 
-     * } catch (WebClientResponseException e) {
-     * payment.setStatus(PaymentStatus.REJECTED);
-     * }
-     * 
-     * Payment saved = paymentRepository.save(payment);
-     * notificationPublisher.publish(toEvent(saved));
-     * return toResponse(saved);
-     * }
-     */
-
-    /*
-     * public PaymentResponse create(PaymentRequest request) {
-     * Payment payment = new Payment();
-     * payment.setMerchant(request.getMerchant());
-     * payment.setAmount(request.getAmount());
-     * payment.setCurrency(request.getCurrency());
-     * payment.setCreatedAt(LocalDateTime.now());
-     * 
-     * // 1. Validar tarjeta con provider
-     * try {
-     * boolean approved = validateCard(request);
-     * if (!approved) {
-     * payment.setStatus(PaymentStatus.REJECTED);
-     * Payment saved = paymentRepository.save(payment);
-     * notificationPublisher.publish(toEvent(saved));
-     * return toResponse(saved);
-     * }
-     * } catch (Exception e) {
-     * log.warn("Provider service unavailable: {}", e.getMessage());
-     * payment.setStatus(PaymentStatus.REJECTED);
-     * Payment saved = paymentRepository.save(payment);
-     * notificationPublisher.publish(toEvent(saved));
-     * return toResponse(saved);
-     * }
-     * 
-     * // 2. Validar saldo con account-service
-     * try {
-     * debitAccount(request);
-     * payment.setStatus(PaymentStatus.APPROVED);
-     * } catch (Exception e) {
-     * log.warn("Account service unavailable or insufficient funds: {}",
-     * e.getMessage());
-     * payment.setStatus(PaymentStatus.REJECTED);
-     * }
-     * 
-     * Payment saved = paymentRepository.save(payment);
-     * notificationPublisher.publish(toEvent(saved));
-     * return toResponse(saved);
-     * }
-     */
-
+    @Transactional
     public PaymentResponse create(PaymentRequest request) {
         Payment payment = new Payment();
         payment.setMerchant(request.getMerchant());
@@ -148,16 +61,12 @@ public class PaymentService {
             boolean approved = providerServiceClient.validate(request);
             if (!approved) {
                 payment.setStatus(PaymentStatus.REJECTED);
-                Payment saved = paymentRepository.save(payment);
-                notificationPublisher.publish(toEvent(saved));
-                return toResponse(saved);
+                return saveWithOutbox(payment);
             }
         } catch (Exception e) {
             log.warn("Provider validation failed: {}", e.getMessage());
             payment.setStatus(PaymentStatus.REJECTED);
-            Payment saved = paymentRepository.save(payment);
-            notificationPublisher.publish(toEvent(saved));
-            return toResponse(saved);
+            return saveWithOutbox(payment);
         }
 
         // 2. Debitar cuenta
@@ -169,18 +78,29 @@ public class PaymentService {
             payment.setStatus(PaymentStatus.REJECTED);
         }
 
-        Payment saved = paymentRepository.save(payment);
-        notificationPublisher.publish(toEvent(saved));
-        return toResponse(saved);
+        return saveWithOutbox(payment);
     }
 
-    private PaymentEvent toEvent(Payment payment) {
-        return new PaymentEvent(
-                payment.getId(),
-                payment.getMerchant(),
-                payment.getAmount(),
-                payment.getCurrency(),
-                payment.getStatus().name());
+    private PaymentResponse saveWithOutbox(Payment payment) {
+        Payment saved = paymentRepository.save(payment);
+
+        try {
+            PaymentEvent event = toEvent(saved);
+            String payload = objectMapper.writeValueAsString(event);
+
+            OutboxEvent outboxEvent = new OutboxEvent();
+            outboxEvent.setPaymentId(saved.getId());
+            outboxEvent.setEventType("PaymentProcessed");
+            outboxEvent.setPayload(payload);
+            outboxEvent.setProcessed(false);
+            outboxEvent.setCreatedAt(LocalDateTime.now());
+
+            outboxEventRepository.save(outboxEvent);
+        } catch (Exception e) {
+            log.error("Failed to save outbox event: {}", e.getMessage());
+        }
+
+        return toResponse(saved);
     }
 
     public PaymentResponse findById(Long id) {
@@ -196,6 +116,16 @@ public class PaymentService {
                 .toList();
     }
 
+    private PaymentEvent toEvent(Payment payment) {
+        return new PaymentEvent(
+                payment.getId(),
+                payment.getMerchant(),
+                payment.getAmount(),
+                payment.getCurrency(),
+                payment.getStatus().name()
+        );
+    }
+
     private PaymentResponse toResponse(Payment payment) {
         return new PaymentResponse(
                 payment.getId(),
@@ -203,43 +133,7 @@ public class PaymentService {
                 payment.getAmount(),
                 payment.getCurrency(),
                 payment.getStatus(),
-                payment.getCreatedAt());
+                payment.getCreatedAt()
+        );
     }
-
-    // @CircuitBreaker(name = "providerService", fallbackMethod = "validateCardFallback")
-    // @Retry(name = "providerService")
-    // public boolean validateCard(PaymentRequest request) {
-    //     CardValidationRequest cardRequest = new CardValidationRequest(
-    //             request.getCardNumber(),
-    //             request.getAmount(),
-    //             request.getCurrency());
-    //     CardValidationResponse response = providerWebClient.post()
-    //             .uri("/provider/validate")
-    //             .bodyValue(cardRequest)
-    //             .retrieve()
-    //             .bodyToMono(CardValidationResponse.class)
-    //             .block();
-    //     return response != null && response.isApproved();
-    // }
-
-    // public boolean validateCardFallback(PaymentRequest request, Exception e) {
-    //     log.warn("Circuit breaker open for providerService: {}", e.getMessage());
-    //     return false;
-    // }
-
-    // @CircuitBreaker(name = "accountService", fallbackMethod = "debitAccountFallback")
-    // @Retry(name = "accountService")
-    // public void debitAccount(PaymentRequest request) {
-    //     accountWebClient.post()
-    //             .uri("/accounts/{merchantId}/debit", request.getMerchant())
-    //             .bodyValue(new DebitRequest(request.getAmount()))
-    //             .retrieve()
-    //             .toBodilessEntity()
-    //             .block();
-    // }
-
-    // public void debitAccountFallback(PaymentRequest request, Exception e) {
-    //     log.warn("Circuit breaker open for accountService: {}", e.getMessage());
-    //     throw new RuntimeException("Account service unavailable");
-    // }
 }

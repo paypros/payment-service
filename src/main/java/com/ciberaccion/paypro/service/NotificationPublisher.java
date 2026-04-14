@@ -30,10 +30,23 @@ public class NotificationPublisher {
                     .queueUrl(queueUrl)
                     .messageBody(message)
                     .build());
-            log.info("Event published to SQS: paymentId={} status={}", 
+            log.info("Event published to SQS: paymentId={} status={}",
                     event.getPaymentId(), event.getStatus());
         } catch (Exception e) {
             log.error("Failed to publish event to SQS: {}", e.getMessage());
+        }
+    }
+
+    public void publishRaw(String payload) {
+        try {
+            sqsClient.sendMessage(SendMessageRequest.builder()
+                    .queueUrl(queueUrl)
+                    .messageBody(payload)
+                    .build());
+            log.info("Event published to SQS");
+        } catch (Exception e) {
+            log.error("Failed to publish to SQS: {}", e.getMessage());
+            throw new RuntimeException("SQS publish failed", e);
         }
     }
 }
