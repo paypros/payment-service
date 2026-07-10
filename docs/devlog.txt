@@ -315,21 +315,34 @@ APAGAR
 aws ecs update-service --cluster paypro-cluster --service paypro-service --desired-count 0 --region us-east-1
 aws ecs update-service --cluster paypro-cluster --service account-service --desired-count 0 --region us-east-1
 aws ecs update-service --cluster paypro-cluster --service provider-service --desired-count 0 --region us-east-1
+aws ecs update-service --cluster paypro-cluster --service notification-service --desired-count 0 --region us-east-1
 
 11.Abril
 Crear notification service
 
-aws ecs update-service --cluster paypro-cluster --service paypro-service --desired-count 0 --region us-east-1
-aws ecs update-service --cluster paypro-cluster --service account-service --desired-count 0 --region us-east-1
-aws ecs update-service --cluster paypro-cluster --service provider-service --desired-count 0 --region us-east-1
-aws ecs update-service --cluster paypro-cluster --service notification-service --desired-count 0 --region us-east-1
+aws ecs update-service --cluster paypro-cluster --service paypro-service --desired-count 1 --region us-east-1
+aws ecs update-service --cluster paypro-cluster --service account-service --desired-count 1 --region us-east-1
+aws ecs update-service --cluster paypro-cluster --service provider-service --desired-count 1 --region us-east-1
+aws ecs update-service --cluster paypro-cluster --service notification-service --desired-count 1 --region us-east-1
 
 # Tienda Test con saldo suficiente
-curl -X POST http://54.87.25.151:8081/accounts \
+curl -X POST http://54.242.1204.9:8081/accounts \
   -H "Content-Type: application/json" \
   -d '{"merchantId": "Tienda Test", "balance": 5000.00, "currency": "MXN"}'
 
 # Tienda B con saldo bajo
-curl -X POST http://54.87.25.151:8081/accounts \
+curl -X POST http://54.91.51.188:8081/accounts \
   -H "Content-Type: application/json" \
   -d '{"merchantId": "Tienda B", "balance": 100.00, "currency": "MXN"}'
+
+
+aws logs tail /ecs/paypro-task --region us-east-1 --since 3m --filter-pattern "Circuit"
+
+curl -X POST http://54.242.120.9:8080/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "password123"}'
+  
+curl -X POST http://54.242.120.9:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "password123"}'
+
