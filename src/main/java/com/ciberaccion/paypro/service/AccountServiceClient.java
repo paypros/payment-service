@@ -18,8 +18,8 @@ public class AccountServiceClient {
         this.accountWebClient = accountWebClient;
     }
 
-    @CircuitBreaker(name = "accountService", fallbackMethod = "debitFallback")
-    @Retry(name = "accountService")
+    @Retry(name = "accountService", fallbackMethod = "debitFallback")
+    @CircuitBreaker(name = "accountService")
     public void debit(PaymentRequest request) {
         accountWebClient.post()
                 .uri("/accounts/{merchantId}/debit", request.getMerchant())
@@ -32,6 +32,8 @@ public class AccountServiceClient {
     public void debitFallback(PaymentRequest request, Exception e) {
         if (e instanceof io.github.resilience4j.circuitbreaker.CallNotPermittedException) {
             log.warn("⚡ Circuit breaker OPEN — llamada bloqueada sin intentar: {}", e.getMessage());
+        } else if (e instanceof org.springframework.web.reactive.function.client.WebClientResponseException.BadRequest) {
+            log.warn("⛔ Account service rechazó la solicitud (regla de negocio, sin reintento): {}", e.getMessage());
         } else {
             log.warn("❌ Account service falló, circuito contando fallo: {}", e.getMessage());
         }
