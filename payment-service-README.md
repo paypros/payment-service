@@ -48,7 +48,32 @@ OTEL_TRACES_EXPORTER
 ```
 
 ## Autenticación
-API Key via header `X-API-KEY`. Implementado como filtro `OncePerRequestFilter`. Los endpoints de Actuator están excluidos del filtro.
+Dos capas de seguridad combinadas:
+
+**1. API Key** — header `X-API-KEY`, validado por `ApiKeyFilter` (`OncePerRequestFilter`). Actualmente deshabilitado (`@Component` comentado) a favor de JWT; se deja como referencia de un patrón alternativo.
+
+**2. JWT (activo)** — header `Authorization: Bearer <token>`.
+```
+POST /auth/register  → crea usuario (username, password) con BCrypt
+POST /auth/login     → valida credenciales, retorna JWT firmado (HS512)
+```
+Flujo:
+```
+JwtFilter (OncePerRequestFilter)
+    │
+    ├── Extrae token del header Authorization
+    ├── JwtService.isValid(token) → verifica firma y expiración
+    ├── JwtService.extractUsername(token) → subject del JWT
+    └── Carga el User de DB y lo registra en SecurityContextHolder
+            → request autenticado para el resto del filtro chain
+```
+`SecurityConfig` define:
+- `/auth/**`, `/actuator/**`, `/h2-console/**` → públicos (`permitAll`)
+- Cualquier otro endpoint → requiere autenticación (`anyRequest().authenticated()`)
+- Sesión `STATELESS` — sin sesiones de servidor, cada request se autentica solo con el JWT
+- `AuthenticationEntryPoint` custom → responde 401 con JSON en vez del HTML default de Spring Security
+
+Los endpoints de Actuator están excluidos de ambos filtros.
 
 ## Comunicación entre servicios
 Usa AWS Cloud Map para DNS privado dentro de la VPC:
@@ -181,3 +206,21 @@ En entrevistas: "Usamos WebClient síncrono por simplicidad, sabiendo que puede 
 ### 13. Spring Boot 4.1.0-M1 con artefactos inexistentes
 **Problema:** El proyecto fue generado con Spring Boot `4.1.0-M1` (versión milestone) con artefactos de nombres no estándar que no existen en Maven Central.
 **Solución:** Migrado a Spring Boot `3.5.13` y corregidos los nombres de artefactos a los estándar: `spring-boot-starter-web`, `spring-boot-starter-test`, etc.
+
+### 15. Retry reintentando errores de negocio (400 Bad Request)
+**Problema:** Un rechazo legítimo de `account-service` (saldo insuficiente, HTTP 400) se reintentaba 3 veces con delays de 500ms, agregando ~1.5s de latencia innecesaria a una respuesta que nunca iba a cambiar de resultado.
+**Causa raíz:** El `fallbackMethod` estaba declarado en `@CircuitBreaker` (aspecto interno). Al ejecutarse, convertía la excepción original (`WebClientResponseException.BadRequest`) en un `RuntimeException` genérico *antes* de que `@Retry` (aspecto externo) pudiera evaluarla contra su lista de `ignore-exceptions` — Retry nunca veía la excepción real, solo la ya transformada, así que no la reconocía como "no reintentable".
+**Solución:** Se movió el `fallbackMethod` de `@CircuitBreaker` a `@Retry`:
+```java
+@Retry(name = "accountService", fallbackMethod = "debitFallback")
+@CircuitBreaker(name = "accountService")
+public void debit(PaymentRequest request) { ... }
+```
+Así CircuitBreaker solo registra la métrica de fallo y relanza la excepción original sin transformarla, permitiendo que Retry la compare correctamente contra:
+```properties
+resilience4j.retry.instances.accountService.ignore-exceptions=io.github.resilience4j.circuitbreaker.CallNotPermittedException,org.springframework.web.reactive.function.client.WebClientResponseException$BadRequest
+```
+**Resultado:** de 3 intentos y ~1500-1700ms a 1 intento y ~30-40ms para errores de negocio. Los fallos transitorios reales (timeouts, 5xx) siguen reintentándose normalmente.
+**Lección de arquitectura:** cuando se combinan `@CircuitBreaker` y `@Retry` en Spring, el orden de ejecución real de los aspectos no lo determina el orden de las anotaciones en el código — Resilience4j aplica un orden fijo (Retry como el más externo por defecto). El `fallbackMethod` debe ir en el aspecto más externo que se quiera que "vea" la excepción original antes de decidir si reintentar.
+
+**Nota de debugging:** durante la investigación, el síntoma persistió por varios reinicios porque **Spring Boot Dashboard** (extensión de VS Code) estaba sirviendo bytecode compilado por el Java Language Server, desincronizado del código fuente editado — el "Restart" se veía limpio pero no reflejaba los cambios. Se confirmó agregando un log temporal único (`XXXXXXXXXX PRUEBA XXXXXXXXXX`) que no aparecía hasta correr `./mvnw clean spring-boot:run` desde terminal. Recomendación: usar Maven desde terminal para iterar en cambios de lógica de resiliencia/aspectos, reservando el Dashboard para arranque rápido cuando no hay dudas de sincronización.
