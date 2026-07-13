@@ -1,0 +1,112 @@
+### ============================================
+### PayPro - payment-service - Pruebas locales
+### Requiere: account-service (8081), provider-service (8082),
+### notification-service (8083) y payment-service (8080) corriendo.
+### ============================================
+
+@baseUrl = http://localhost:8080
+@apiKey = secret123
+
+### 1. Registrar usuario (solo una vez)
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "username": "alfonso",
+  "password": "password123"
+}
+
+### 2. Login - copia el "token" de la respuesta y pégalo en @token abajo
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "username": "alfonso",
+  "password": "password123"
+}
+
+### ⬇️ Pega aquí el JWT obtenido en el paso 2
+@token = eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZvbnNvIiwiaWF0IjoxNzgzOTEzNjYyLCJleHAiOjE3ODQwMDAwNjJ9.FZhPZ1M_17aVo2vL2nAA8Df9YJPYlTROdid0bRup_hj0kEXcy6Fj8veQNtMKtJ_0BkNW6ghP013wpvz6JdtguQ
+
+### ============================================
+### CASOS DE PRUEBA
+### ============================================
+
+### Caso 1: Pago aprobado (tarjeta válida, saldo suficiente)
+POST {{baseUrl}}/payments
+Content-Type: application/json
+X-API-KEY: {{apiKey}}
+Authorization: Bearer {{token}}
+
+{
+  "merchant": "Tienda Test",
+  "amount": 100.00,
+  "currency": "MXN",
+  "cardNumber": "4532015112830366"
+}
+
+### Caso 2: Tarjeta bloqueada -> REJECTED
+POST {{baseUrl}}/payments
+Content-Type: application/json
+X-API-KEY: {{apiKey}}
+Authorization: Bearer {{token}}
+
+{
+  "merchant": "Tienda Test",
+  "amount": 100.00,
+  "currency": "MXN",
+  "cardNumber": "4111111111111111"
+}
+
+### Caso 3: Monto excede límite ($10,000) -> REJECTED
+POST {{baseUrl}}/payments
+Content-Type: application/json
+X-API-KEY: {{apiKey}}
+Authorization: Bearer {{token}}
+
+{
+  "merchant": "Tienda Test",
+  "amount": 15000.00,
+  "currency": "MXN",
+  "cardNumber": "4532015112830366"
+}
+
+### Caso 4: Red de tarjeta no soportada (Amex/Discover) -> REJECTED
+POST {{baseUrl}}/payments
+Content-Type: application/json
+X-API-KEY: {{apiKey}}
+Authorization: Bearer {{token}}
+
+{
+  "merchant": "Tienda Test",
+  "amount": 100.00,
+  "currency": "MXN",
+  "cardNumber": "6011000000000000"
+}
+
+### Caso 5: Saldo insuficiente (Tienda B tiene solo 100 MXN) -> REJECTED
+POST {{baseUrl}}/payments
+Content-Type: application/json
+X-API-KEY: {{apiKey}}
+Authorization: Bearer {{token}}
+
+{
+  "merchant": "Tienda B",
+  "amount": 500.00,
+  "currency": "MXN",
+  "cardNumber": "4532015112830366"
+}
+
+### ============================================
+### Consultas
+### ============================================
+
+### Listar todos los pagos
+GET {{baseUrl}}/payments
+X-API-KEY: {{apiKey}}
+Authorization: Bearer {{token}}
+
+### Obtener pago por ID (cambia el 1 según corresponda)
+GET {{baseUrl}}/payments/1
+X-API-KEY: {{apiKey}}
+Authorization: Bearer {{token}}
